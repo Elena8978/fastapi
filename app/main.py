@@ -1,193 +1,106 @@
-from fastapi import FastAPI, HTTPException, Request, APIRouter
+from fastapi import FastAPI, HTTPException, Request, APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from sqlalchemy.orm import Session
+from typing import List
+
+from app.database.db import engine, get_db, Base
+from app.database.models import Film as FilmModel
+from app.schemas.film_schemas import FilmCreate, FilmUpdate, FilmResponse
+from app.crud import film_crud
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
-
 templates = Jinja2Templates(directory="app/templates")
-templates.env.cache = None 
+templates.env.cache = None
 
 api_router = APIRouter(prefix="/api", tags=["API"])
 
-ALLOWED_GENRES = {"ужасы", "приключение", "драма", "боевик", "комедия", "фантастика"}
 
-class FilmModel(BaseModel):
-    id: int
-    title: str
-    likes: int
-    dislikes: int
-    publish_year: int
-    genre: str
-
-class FilmCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=255)
-    likes: int = 0
-    dislikes: int = 0
-    publish_year: int
-    genre: str
-
-    @field_validator("title")
-    @classmethod
-    def check_title_not_only_spaces(cls, v: str) -> str:
-        if v.strip() == "":
-            raise ValueError("Название не должно состоять только из пробелов.")
-        return v
-
-    @field_validator("likes", "dislikes")
-    @classmethod
-    def check_non_negative(cls, v: int) -> int:
-        if v < 0:
-            raise ValueError("Количество лайков/дизлайков не может быть меньше нуля.")
-        return v
-
-    @field_validator("publish_year")
-    @classmethod
-    def check_year_min(cls, v: int) -> int:
-        if v < 1888:
-            raise ValueError("Год выпуска должен быть не раньше 1888.")
-        return v
-
-    @field_validator("genre")
-    @classmethod
-    def check_genre_allowed(cls, v: str) -> str:
-        v_clean = v.strip().lower()
-        if v_clean not in ALLOWED_GENRES:
-            raise ValueError(f"Жанр должен быть одним из: {', '.join(ALLOWED_GENRES)}")
-        return v_clean
-
-class FilmUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, max_length=255)
-    likes: Optional[int] = None
-    dislikes: Optional[int] = None
-    publish_year: Optional[int] = None
-    genre: Optional[str] = None
-
-    @field_validator("title", mode="before")
-    @classmethod
-    def check_title_before(cls, v):
-        if isinstance(v, str) and v.strip() == "":
-            raise ValueError("Название не должно состоять только из пробелов.")
-        return v
-
-    @field_validator("likes", "dislikes", mode="before")
-    @classmethod
-    def check_likes_dislikes_before(cls, v):
-        if isinstance(v, int) and v < 0:
-            raise ValueError("Значение не может быть меньше нуля.")
-        return v
-
-    @field_validator("publish_year", mode="before")
-    @classmethod
-    def check_year_before(cls, v):
-        if isinstance(v, int) and v < 1888:
-            raise ValueError("Год выпуска должен быть не раньше 1888.")
-        return v
-
-    @field_validator("genre", mode="before")
-    @classmethod
-    def check_genre_before(cls, v):
-        if isinstance(v, str):
-            v_clean = v.strip().lower()
-            if v_clean not in ALLOWED_GENRES:
-                raise ValueError(f"Жанр должен быть одним из: {', '.join(ALLOWED_GENRES)}")
-            return v_clean
-        return v
-
-films_db: List[FilmModel] = [
-    FilmModel(id=1, title="Inception", likes=120, dislikes=15, publish_year=2010, genre="фантастика"),
-    FilmModel(id=2, title="The Dark Knight", likes=250, dislikes=20, publish_year=2008, genre="боевик"),
-    FilmModel(id=3, title="Interstellar", likes=180, dislikes=10, publish_year=2014, genre="фантастика"),
-]
-
-def get_film_by_id(film_id: int) -> Optional[FilmModel]:
-    for film in films_db:
-        if film.id == film_id:
-            return film
-    return None
-
-
-@api_router.get("/films")
-async def get_films():
-    return films_db
-
-@api_router.get("/films/{film_id}")
-async def get_film(film_id: int):
-    film = get_film_by_id(film_id)
-    if not film:
-        raise HTTPException(status_code=404, detail="Фильм не найден")
-    return film
-
-@api_router.post("/films")
-async def create_film(film: FilmCreate):
-    new_id = max((f.id for f in films_db), default=0) + 1
-    new_film = FilmModel(id=new_id, **film.model_dump())
-    films_db.append(new_film)
-    return new_film
-
-@api_router.put("/films/{film_id}")
-async def update_film(film_id: int, film_update: FilmUpdate):
-    film = get_film_by_id(film_id)
-    if not film:
-        raise HTTPException(status_code=404, detail="Фильм не найден")
-
-    update_data = film_update.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(film, key, value)
+@api_router.get("/films", response_model=List[FilmResponse])
+async def get_films(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     
+    return film_crud.get_films(db, skip=skip, limit=limit)
+
+@api_router.get("/films/{film_id}", response_model=FilmResponse)
+async def get_film(film_id: int, db: Session = Depends(get_db)):
+    
+    film = film_crud.get_film_by_id(db, film_id)
+    if not film:
+        raise HTTPException(status_code=404, detail="Фильм не найден")
     return film
+
+@api_router.post("/films", response_model=FilmResponse, status_code=201)
+async def create_film(film: FilmCreate, db: Session = Depends(get_db)):
+    
+    return film_crud.create_film(db, film)
+
+@api_router.put("/films/{film_id}", response_model=FilmResponse)
+async def update_film(film_id: int, film_update: FilmUpdate, db: Session = Depends(get_db)):
+    
+    updated_film = film_crud.update_film(db, film_id, film_update)
+    if not updated_film:
+        raise HTTPException(status_code=404, detail="Фильм не найден")
+    return updated_film
 
 @api_router.delete("/films/{film_id}")
-async def delete_film(film_id: int):
-    global films_db
-    film = get_film_by_id(film_id)
-    if not film:
+async def delete_film(film_id: int, db: Session = Depends(get_db)):
+    
+    deleted = film_crud.delete_film(db, film_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Фильм не найден")
-    films_db = [f for f in films_db if f.id != film_id]
     return {"detail": "Фильм удалён"}
+
+@api_router.get("/films/genres/all")
+async def get_genres(db: Session = Depends(get_db)):
+    return film_crud.get_all_genres(db)
+
+@api_router.get("/films/genre/{genre}", response_model=List[FilmResponse])
+async def get_films_by_genre(genre: str, db: Session = Depends(get_db)):
+   return film_crud.get_films_by_genre(db, genre)
 
 app.include_router(api_router)
 
+
 @app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    total_count = len(films_db)
+async def read_root(request: Request, db: Session = Depends(get_db)):
 
-    most_liked_dict = None
-    most_disliked_dict = None
-
-    if films_db:
-        most_liked = max(films_db, key=lambda f: f.likes)
-        most_disliked = min(films_db, key=lambda f: f.dislikes)
-        most_liked_dict = most_liked.model_dump()
-        most_disliked_dict = most_disliked.model_dump()
-
+    stats = film_crud.get_film_stats(db)
+    
     context = {
         "request": request,
-        "total_count": total_count,
-        "most_liked": most_liked_dict,
-        "most_disliked": most_disliked_dict,
+        "total_count": stats["total_count"],
+        "most_liked": stats["most_liked"],
+        "most_disliked": stats["most_disliked"],
     }
-
-    return templates.TemplateResponse("index.html", context)  
+    return templates.TemplateResponse("index.html", context)
 
 @app.get("/catalog", response_class=HTMLResponse)
-async def catalog(request: Request):
+async def catalog(request: Request, db: Session = Depends(get_db)):
+    
+    films = film_crud.get_films(db)
+    genres = film_crud.get_all_genres(db)
+    
     context = {
         "request": request,
-        "films": films_db, 
+        "films": films,
+        "genres": genres,
     }
     return templates.TemplateResponse("catalog.html", context)
 
 @app.get("/catalog/{genre}", response_class=HTMLResponse)
-async def catalog_by_genre(request: Request, genre: str):
-    filtered_films = [film for film in films_db if film.genre == genre]
+async def catalog_by_genre(request: Request, genre: str, db: Session = Depends(get_db)):
+    
+    filtered_films = film_crud.get_films_by_genre(db, genre)
+    genres = film_crud.get_all_genres(db)
     
     context = {
         "request": request,
-        "films": filtered_films,  
+        "films": filtered_films,
+        "genres": genres,
+        "current_genre": genre,
     }
-    
     return templates.TemplateResponse("catalog.html", context)
 
 
