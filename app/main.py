@@ -135,7 +135,7 @@ async def update_film(film_id: int, film_update: FilmUpdate):
     update_data = film_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(film, key, value)
-    # id менять не нужно
+    
     return film
 
 @api_router.delete("/films/{film_id}")
@@ -159,7 +159,6 @@ async def read_root(request: Request):
     if films_db:
         most_liked = max(films_db, key=lambda f: f.likes)
         most_disliked = min(films_db, key=lambda f: f.dislikes)
-        # Превращаем Pydantic-модели в обычные dict
         most_liked_dict = most_liked.model_dump()
         most_disliked_dict = most_disliked.model_dump()
 
@@ -170,4 +169,33 @@ async def read_root(request: Request):
         "most_disliked": most_disliked_dict,
     }
 
-    return templates.TemplateResponse("index.html", context)
+    return templates.TemplateResponse("index.html", context)  
+
+@app.get("/catalog", response_class=HTMLResponse)
+async def catalog(request: Request):
+    context = {
+        "request": request,
+        "films": films_db, 
+    }
+    return templates.TemplateResponse("catalog.html", context)
+
+@app.get("/catalog/{genre}", response_class=HTMLResponse)
+async def catalog_by_genre(request: Request, genre: str):
+    filtered_films = [film for film in films_db if film.genre == genre]
+    
+    context = {
+        "request": request,
+        "films": filtered_films,  
+    }
+    
+    return templates.TemplateResponse("catalog.html", context)
+
+
+
+
+
+
+
+
+
+
